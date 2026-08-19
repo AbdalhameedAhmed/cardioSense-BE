@@ -1,0 +1,10 @@
+WHO CARDIOVASCULAR RISK MANAGEMENT GUIDELINES
+Section 1: Blood Pressure Thresholds
+1. Hypertension is defined as systolic blood pressure (SBP) greater than or equal to 140 mmHg and/or diastolic blood pressure (DBP) greater than or equal to 90 mmHg.
+2. For patients with SBP between 130-139 mmHg or DBP between 80-89 mmHg, lifestyle modifications (weight loss, sodium reduction, physical exercise) are recommended.
+3. Pharmacological treatment is indicated for adults with SBP >= 140 or DBP >= 90 when lifestyle interventions fail.
+
+Section 2: Cardiovascular Risk Evaluation
+1. Total cholesterol and HDL levels should be assessed.
+2. Patients with diabetes or chronic kidney disease are classified as high cardiovascular risk, regardless of other factors.
+3. Smoking status should be recorded and cessation advice offered to all smokers.
