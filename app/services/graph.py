@@ -36,6 +36,21 @@ def extract_text(content: Any) -> str:
 # if the embedding model, chunking, or corpus changes.
 RELEVANCE_DISTANCE_THRESHOLD = 0.28
 
+# Confidence-score calibration anchors, taken from the SAME eval_retrieval.py
+# run as the threshold above: the closest true-positive distance we observed
+# (-> 100% confidence) and the farthest confirmed true-negative/out-of-domain
+# distance (-> 0% confidence). This is a linear interpolation between two real
+# measured points, not an arbitrary formula — re-run the eval script and
+# update these anchors if the embedding model, chunking, or corpus changes.
+CONFIDENCE_DISTANCE_FLOOR = 0.19
+CONFIDENCE_DISTANCE_CEIL = 0.37
+
+def distance_to_confidence(distance: float) -> int:
+    """Maps a cosine distance to a 0-100 retrieval confidence score."""
+    span = CONFIDENCE_DISTANCE_CEIL - CONFIDENCE_DISTANCE_FLOOR
+    normalized = (CONFIDENCE_DISTANCE_CEIL - distance) / span
+    return round(max(0.0, min(1.0, normalized)) * 100)
+
 # ====================
 # State Definition
 # ====================
@@ -47,6 +62,7 @@ class AgentState(TypedDict):
     rag_context: List[str]
     citations: List[Dict[str, Any]]
     evidence_sufficient: bool
+    retrieval_confidence: int
     risk_category: Optional[str]
     recommendations: List[str]
     evaluation_complete: bool
@@ -194,7 +210,7 @@ async def rag_node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
     db_factory = config.get("configurable", {}).get("db_factory")
     if not db_factory:
         logger.error("No database session factory provided in graph config.")
-        return {"rag_context": [], "citations": [], "evidence_sufficient": False}
+        return {"rag_context": [], "citations": [], "evidence_sufficient": False, "retrieval_confidence": 0}
 
     case = state.get("case_data", {})
     sys_bp = case.get("systolic_bp")
@@ -220,16 +236,25 @@ async def rag_node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
                 "page_start": c["page_start"],
                 "page_end": c["page_end"],
                 "distance": c["distance"],
+                "confidence": distance_to_confidence(c["distance"]),
             }
             for c in chunks
         ]
         # Evidence only counts as "sufficient" if at least one retrieved chunk
         # is actually close to the query, not merely the least-bad of a bad batch.
-        evidence_sufficient = bool(chunks) and min(c["distance"] for c in chunks) <= RELEVANCE_DISTANCE_THRESHOLD
-        return {"rag_context": context, "citations": citations, "evidence_sufficient": evidence_sufficient}
+        # The overall retrieval_confidence uses that same best (lowest) distance.
+        best_distance = min((c["distance"] for c in chunks), default=None)
+        evidence_sufficient = best_distance is not None and best_distance <= RELEVANCE_DISTANCE_THRESHOLD
+        retrieval_confidence = distance_to_confidence(best_distance) if best_distance is not None else 0
+        return {
+            "rag_context": context,
+            "citations": citations,
+            "evidence_sufficient": evidence_sufficient,
+            "retrieval_confidence": retrieval_confidence,
+        }
     except Exception as e:
         logger.error(f"RAG search error: {e}")
-        return {"rag_context": [], "citations": [], "evidence_sufficient": False}
+        return {"rag_context": [], "citations": [], "evidence_sufficient": False, "retrieval_confidence": 0}
 
 # ====================
 # Node 4: Risk Evaluation
@@ -252,7 +277,9 @@ def format_citations(citations: List[Dict[str, Any]]) -> str:
             pages = f"p. {page_start}" if page_start == page_end else f"pp. {page_start}–{page_end}"
         else:
             pages = "page unknown"
-        lines.append(f"- [{i}] *{title}*, {pages}")
+        confidence = c.get("confidence")
+        confidence_str = f" — {confidence}% match confidence" if confidence is not None else ""
+        lines.append(f"- [{i}] *{title}*, {pages}{confidence_str}")
     return "\n".join(lines)
 
 
@@ -262,6 +289,7 @@ async def evaluate_node(state: AgentState) -> Dict[str, Any]:
     context = state.get("rag_context", [])
     citations = state.get("citations", [])
     evidence_sufficient = state.get("evidence_sufficient", False)
+    retrieval_confidence = state.get("retrieval_confidence", 0)
 
     # Demographics
     age = case.get("age", 50)
@@ -276,6 +304,7 @@ async def evaluate_node(state: AgentState) -> Dict[str, Any]:
         content = (
             "### Cardiovascular Risk Assessment\n\n"
             "**Risk Category:** Insufficient Evidence\n\n"
+            f"**Retrieval Confidence:** {retrieval_confidence}% (below the threshold required to proceed)\n\n"
             "I could not retrieve guideline content that confidently matches this patient's profile, "
             "so I'm not going to generate a risk category or treatment recommendation from general "
             "knowledge alone.\n\n"
@@ -323,6 +352,7 @@ async def evaluate_node(state: AgentState) -> Dict[str, Any]:
         content = (
             f"### Cardiovascular Risk Assessment Report\n\n"
             f"**Risk Category:** {risk} Risk\n\n"
+            f"**Retrieval Confidence:** {retrieval_confidence}%\n\n"
             f"**Clinical Recommendations:**\n"
             + "\n".join([f"- {r}" for r in recs]) + "\n\n"
             f"*(Note: Simulated evaluation run due to local development mode).* "
@@ -398,6 +428,7 @@ async def evaluate_node(state: AgentState) -> Dict[str, Any]:
         formatted_message = (
             f"### Cardiovascular Risk Assessment Report\n\n"
             f"**Risk Category:** {risk_category} Risk\n\n"
+            f"**Retrieval Confidence:** {retrieval_confidence}%\n\n"
             f"{summary}\n\n"
             f"**Clinical Recommendations:**\n"
             + "\n".join([f"- {r}" for r in recs])

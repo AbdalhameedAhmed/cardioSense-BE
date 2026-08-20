@@ -145,6 +145,7 @@ async def create_session(payload: SessionCreateRequest):
             "rag_context": [],
             "citations": [],
             "evidence_sufficient": False,
+            "retrieval_confidence": 0,
             "risk_category": None,
             "recommendations": [],
             "evaluation_complete": False
@@ -184,6 +185,7 @@ async def create_session(payload: SessionCreateRequest):
                     "rag_context": output_state.get("rag_context", []),
                     "citations": output_state.get("citations", []),
                     "evidence_sufficient": output_state.get("evidence_sufficient", False),
+                    "retrieval_confidence": output_state.get("retrieval_confidence", 0),
                     "risk_category": output_state.get("risk_category"),
                     "recommendations": output_state.get("recommendations", []),
                     "evaluation_complete": output_state.get("evaluation_complete", False)
@@ -306,6 +308,7 @@ async def send_message(session_id: UUID, payload: MessageSendRequest):
             "rag_context": session_prior_state.get("rag_context", []),
             "citations": session_prior_state.get("citations", []),
             "evidence_sufficient": session_prior_state.get("evidence_sufficient", False),
+            "retrieval_confidence": session_prior_state.get("retrieval_confidence", 0),
             "risk_category": session_prior_state.get("risk_category"),
             "recommendations": session_prior_state.get("recommendations", []),
             "evaluation_complete": session_prior_state.get("evaluation_complete", False)
@@ -341,6 +344,7 @@ async def send_message(session_id: UUID, payload: MessageSendRequest):
                     "rag_context": output_state.get("rag_context", []),
                     "citations": output_state.get("citations", []),
                     "evidence_sufficient": output_state.get("evidence_sufficient", False),
+                    "retrieval_confidence": output_state.get("retrieval_confidence", 0),
                     "risk_category": output_state.get("risk_category"),
                     "recommendations": output_state.get("recommendations", []),
                     "evaluation_complete": output_state.get("evaluation_complete", False)
