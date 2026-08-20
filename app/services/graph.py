@@ -36,14 +36,21 @@ def extract_text(content: Any) -> str:
 # if the embedding model, chunking, or corpus changes.
 RELEVANCE_DISTANCE_THRESHOLD = 0.28
 
-# Confidence-score calibration anchors, taken from the SAME eval_retrieval.py
-# run as the threshold above: the closest true-positive distance we observed
-# (-> 100% confidence) and the farthest confirmed true-negative/out-of-domain
-# distance (-> 0% confidence). This is a linear interpolation between two real
-# measured points, not an arbitrary formula — re-run the eval script and
-# update these anchors if the embedding model, chunking, or corpus changes.
-CONFIDENCE_DISTANCE_FLOOR = 0.19
-CONFIDENCE_DISTANCE_CEIL = 0.37
+# Confidence-score calibration anchors, from scripts/eval_retrieval.py's
+# "CONFIDENCE-SCORE CALIBRATION SUGGESTION" output (10 labeled true-positive
+# queries, 5 out-of-domain true negatives — 100% hit rate, 100% correct
+# routing, 100% correct refusal). FLOOR is the 75th percentile of confirmed
+# true-positive distances, and CEIL is the 25th percentile of confirmed
+# true-negative distances — symmetric trimming on both sides, so a single
+# outlier best-ever match doesn't flatten the whole cluster to 100% (it still
+# retains gradation across match quality), and a single outlier near-miss
+# negative doesn't drag 0% unrealistically close to genuine matches either.
+# This is a linear interpolation between two measured cluster boundaries, not
+# an arbitrary formula — re-run the eval script (ideally with a larger labeled
+# set) and update these anchors if the embedding model, chunking, or corpus
+# changes.
+CONFIDENCE_DISTANCE_FLOOR = 0.198
+CONFIDENCE_DISTANCE_CEIL = 0.327
 
 def distance_to_confidence(distance: float) -> int:
     """Maps a cosine distance to a 0-100 retrieval confidence score."""

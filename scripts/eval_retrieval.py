@@ -66,6 +66,36 @@ RETRIEVAL_CASES = [
         "expect_keywords": ["diabetes", "risk factor"],
         "expect_guideline_contains": None,  # legitimately could come from either doc
     },
+    {
+        "name": "Severe hypertension needing immediate treatment",
+        "query": "cardiovascular risk hypertension blood pressure 178/110 mmHg immediate treatment",
+        "expect_keywords": ["160", "immediate", "delay", "antihypertensive"],
+        "expect_guideline_contains": "hypertension",
+    },
+    {
+        "name": "Blood pressure treatment targets for high-risk patients",
+        "query": "cardiovascular risk blood pressure target treatment goal high risk patient",
+        "expect_keywords": ["target", "mmhg", "130", "140"],
+        "expect_guideline_contains": None,
+    },
+    {
+        "name": "Lifestyle modification for elevated risk",
+        "query": "cardiovascular risk lifestyle modification diet exercise sodium reduction",
+        "expect_keywords": ["lifestyle", "diet", "sodium", "physical activity", "exercise"],
+        "expect_guideline_contains": None,
+    },
+    {
+        "name": "Chronic kidney disease and cardiovascular risk",
+        "query": "cardiovascular risk chronic kidney disease renal impairment comorbidity",
+        "expect_keywords": ["kidney", "renal", "comorbid"],
+        "expect_guideline_contains": None,
+    },
+    {
+        "name": "Statin/lipid-lowering therapy guidance",
+        "query": "cardiovascular risk statin lipid lowering therapy dyslipidemia treatment",
+        "expect_keywords": ["statin", "lipid", "cholesterol"],
+        "expect_guideline_contains": "cardiovascular",
+    },
 ]
 
 # Queries the system should NOT treat as confidently answerable — used to
@@ -74,7 +104,20 @@ OUT_OF_DOMAIN_CASES = [
     {"name": "Unrelated: pediatric asthma dosing", "query": "pediatric asthma inhaler corticosteroid dosing schedule"},
     {"name": "Unrelated: cooking recipe", "query": "how to bake a chocolate cake from scratch"},
     {"name": "Unrelated: software licensing", "query": "open source software license compliance requirements"},
+    {"name": "Unrelated: travel visa requirements", "query": "passport renewal visa application processing time"},
+    {"name": "Unrelated: home renovation", "query": "kitchen remodeling contractor cost estimate"},
 ]
+
+
+def percentile(sorted_values, p: float) -> float:
+    """Linear-interpolation percentile (0.0-1.0) over a pre-sorted list."""
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    k = (len(sorted_values) - 1) * p
+    f, c = int(k), min(int(k) + 1, len(sorted_values) - 1)
+    if f == c:
+        return sorted_values[f]
+    return sorted_values[f] + (k - f) * (sorted_values[c] - sorted_values[f])
 
 
 def contains_any(text: str, keywords) -> bool:
@@ -152,6 +195,33 @@ async def main():
         print(f"\nCurrent RELEVANCE_DISTANCE_THRESHOLD = {RELEVANCE_DISTANCE_THRESHOLD}")
         print("If hit rate is low, or false positives appear above, adjust this threshold")
         print("in app/services/graph.py using the min_distance values printed here.")
+
+        print("\n" + "=" * 70)
+        print(" CONFIDENCE-SCORE CALIBRATION SUGGESTION")
+        print("=" * 70)
+        true_positive_distances = sorted(r["min_distance"] for r in results if r["hit"] and r["routing_ok"])
+        true_negative_distances = sorted(r["min_distance"] for r in neg_results if r["correctly_refused"])
+        if true_positive_distances and true_negative_distances:
+            # Percentile (not raw min/max) on both sides: a single outlier
+            # true-positive shouldn't collapse the whole cluster to 100%, and a
+            # single outlier true-negative shouldn't drag 0% too close to real
+            # matches either. p75 of true positives / p25 of true negatives is
+            # a standard symmetric-trimming choice — it keeps most of each
+            # cluster's spread intact instead of stretching to the extremes.
+            suggested_floor = percentile(true_positive_distances, 0.75)
+            suggested_ceil = percentile(true_negative_distances, 0.25)
+            print(f"True-positive distances (n={len(true_positive_distances)}): {[round(d, 4) for d in true_positive_distances]}")
+            print(f"True-negative distances (n={len(true_negative_distances)}): {[round(d, 4) for d in true_negative_distances]}")
+            if suggested_ceil > suggested_floor:
+                print(f"\nSuggested CONFIDENCE_DISTANCE_FLOOR (p75 of true positives) = {suggested_floor:.4f}")
+                print(f"Suggested CONFIDENCE_DISTANCE_CEIL  (p25 of true negatives) = {suggested_ceil:.4f}")
+                print("(update both constants in app/services/graph.py if these differ from the current values)")
+            else:
+                print("\nWARNING: true-positive and true-negative distance ranges overlap —")
+                print("the current query/embedding setup can't cleanly separate them. Widening")
+                print("the labeled test set is more reliable than tightening these constants further.")
+        else:
+            print("Not enough confirmed hits/refusals to suggest a calibration — check the results above.")
 
 
 if __name__ == "__main__":
