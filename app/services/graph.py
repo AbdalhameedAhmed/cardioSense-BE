@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from typing import Dict, Any, List, Optional, Sequence
 from typing_extensions import TypedDict
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage
@@ -73,6 +74,65 @@ class AgentState(TypedDict):
     risk_category: Optional[str]
     recommendations: List[str]
     evaluation_complete: bool
+    off_topic: bool
+
+# ====================
+# Node 0: Topic Guard
+# ====================
+# Deterministic keyword/pattern allowlist, not an LLM call: this app already
+# depends heavily on Gemini quota (embeddings + LLM per turn), so adding
+# another API round-trip just to classify "is this on-topic?" would add
+# latency and yet another quota-dependent failure point for something that's
+# cheap to check with plain heuristics. The tradeoff is recall, not
+# precision — an oddly-phrased legitimate clinical question might occasionally
+# get refused, but nothing off-topic should ever reach the RAG/LLM pipeline.
+ON_TOPIC_KEYWORDS = [
+    "blood pressure", "bp", "mmhg", "hypertension", "cardiovascular", "cardiac", "heart",
+    "cholesterol", "hdl", "ldl", "diabetes", "diabetic", "smoking", "smoke", "kidney",
+    "risk", "guideline", "who ", "treatment", "medication", "drug", "therapy", "lifestyle",
+    "diet", "sodium", "exercise", "symptom", "dizziness", "headache", "chest pain",
+    "evaluate", "assess", "calculate", "age", "sex", "male", "female", "patient", "case",
+    "recommend", "target", "stage", "systolic", "diastolic", "stroke", "artery",
+]
+BP_READING_PATTERN = re.compile(r'\d{2,3}\s*/\s*\d{2,3}')
+
+OFF_TOPIC_REFUSAL = (
+    "I'm CardioSense's clinical assistant — I can only help with this patient's "
+    "cardiovascular/hypertension risk assessment (providing clinical values, discussing "
+    "the case, or asking about the evaluation and its guideline-based recommendations).\n\n"
+    "That question is outside that scope, so I won't attempt to answer it here. "
+    "Is there anything about this patient's cardiovascular risk I can help with instead?"
+)
+
+def is_on_topic(text: str) -> bool:
+    lower = text.lower()
+    if BP_READING_PATTERN.search(lower):
+        return True
+    return any(kw in lower for kw in ON_TOPIC_KEYWORDS)
+
+def topic_guard_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Refuses to engage with messages unrelated to this app's sole purpose —
+    cardiovascular/hypertension clinical risk assessment — before they reach
+    the interview or RAG/evaluate pipeline. Without this, an off-topic message
+    could still burn an embedding+LLM call chasing an irrelevant "risk
+    assessment", or get a free-form answer from the interview LLM with no
+    guardrail against wandering outside its clinical role.
+    """
+    messages = state.get("messages", [])
+    if not messages:
+        return {"off_topic": False}
+    last = messages[-1]
+    if not isinstance(last, HumanMessage):
+        return {"off_topic": False}
+    text = extract_text(last.content)
+    return {"off_topic": not is_on_topic(text)}
+
+def route_after_guard(state: AgentState) -> str:
+    return "declined" if state.get("off_topic") else "check_missing"
+
+def decline_node(state: AgentState) -> Dict[str, Any]:
+    return {"messages": [AIMessage(content=OFF_TOPIC_REFUSAL)]}
 
 # ====================
 # Node 1: Check Missing Fields
@@ -468,13 +528,24 @@ async def evaluate_node(state: AgentState) -> Dict[str, Any]:
 workflow = StateGraph(AgentState)
 
 # Register nodes
+workflow.add_node("topic_guard", topic_guard_node)
+workflow.add_node("declined", decline_node)
 workflow.add_node("check_missing", check_missing_fields)
 workflow.add_node("interview", interview_node)
 workflow.add_node("rag", rag_node)
 workflow.add_node("evaluate", evaluate_node)
 
-# Set entry point
-workflow.add_edge(START, "check_missing")
+# Set entry point: every turn passes through the topic guard first
+workflow.add_edge(START, "topic_guard")
+
+workflow.add_conditional_edges(
+    "topic_guard",
+    route_after_guard,
+    {
+        "declined": "declined",
+        "check_missing": "check_missing"
+    }
+)
 
 # Add conditional edges
 workflow.add_conditional_edges(
@@ -486,6 +557,7 @@ workflow.add_conditional_edges(
     }
 )
 
+workflow.add_edge("declined", END)
 workflow.add_edge("interview", END)
 workflow.add_edge("rag", "evaluate")
 workflow.add_edge("evaluate", END)
