@@ -397,3 +397,30 @@ async def get_session(session_id: UUID, db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+
+@router.get("/by-case/{case_id}", response_model=SessionResponse)
+async def get_session_by_case(case_id: UUID, db: AsyncSession = Depends(get_db)):
+    try:
+        stmt = (
+            select(AgentSession)
+            .where(AgentSession.case_id == case_id)
+            .options(selectinload(AgentSession.messages))
+            .order_by(AgentSession.created_at.desc())
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        session = result.scalar_one_or_none()
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No agent session found for case {case_id}."
+            )
+        return session
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
